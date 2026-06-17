@@ -2,12 +2,6 @@ from django.dispatch import receiver
 from django.urls import resolve, reverse
 from django.utils.translation import gettext_lazy as _
 
-# ``nav_event_common`` powers the modern eventyay_common event dashboard
-# sidebar (shown next to the "Settings" and "Plugins" entries). It is an
-# ``EventPluginSignal``: eventyay only delivers it to receivers belonging to
-# plugins that are ENABLED for the current event. That is what makes this
-# navigation entry appear when the plugin is toggled on and disappear when it
-# is toggled off -- no extra wiring needed.
 from eventyay.control.signals import nav_event_common
 
 
