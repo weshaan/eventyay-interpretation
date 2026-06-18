@@ -10,13 +10,45 @@
         {% endblocktrans %}
     </div>
 
-    <p>
-        {% blocktrans trimmed %}
-            This page is provided by the interpretation plugin. It only appears while the
-            plugin is enabled for this event. Disable the plugin on the plugins page and this
-            navigation entry and page will disappear.
-        {% endblocktrans %}
-    </p>
+    <div class="panel panel-default">
+        <div class="panel-heading">
+            <h3 class="panel-title">{% trans "Event details" %}</h3>
+        </div>
+        <table class="table">
+            <tbody>
+                <tr>
+                    <th>{% trans "Event name" %}</th>
+                    <td>{{ event.name }}</td>
+                </tr>
+                <tr>
+                    <th>{% trans "Event slug" %}</th>
+                    <td><code>{{ event.slug }}</code></td>
+                </tr>
+                <tr>
+                    <th>{% trans "Organizer" %}</th>
+                    <td>{{ event.organizer.name }}</td>
+                </tr>
+                <tr>
+                    <th>{% trans "Starts" %}</th>
+                    <td>{{ event.date_from }}</td>
+                </tr>
+                <tr>
+                    <th>{% trans "Ends" %}</th>
+                    <td>{{ event.date_to|default:"—" }}</td>
+                </tr>
+                {% if event.location %}
+                    <tr>
+                        <th>{% trans "Location" %}</th>
+                        <td>{{ event.location }}</td>
+                    </tr>
+                {% endif %}
+                <tr>
+                    <th>{% trans "Timezone" %}</th>
+                    <td>{{ event.timezone }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </div>
 
     <div class="panel panel-default">
         <div class="panel-heading">
@@ -38,28 +70,7 @@
                         {% endif %}
                     </td>
                 </tr>
-                <tr>
-                    <th>{% trans "Event slug" %}</th>
-                    <td><code>{{ event.slug }}</code></td>
-                </tr>
-                <tr>
-                    <th>{% trans "Organizer" %}</th>
-                    <td>{{ event.organizer.name }}</td>
-                </tr>
             </tbody>
         </table>
-    </div>
-
-    <div class="panel panel-default">
-        <div class="panel-heading">
-            <h3 class="panel-title">{% trans "Active plugins for this event" %}</h3>
-        </div>
-        <ul class="list-group">
-            {% for plugin in active_plugins %}
-                <li class="list-group-item"><code>{{ plugin }}</code></li>
-            {% empty %}
-                <li class="list-group-item">{% trans "No plugins enabled." %}</li>
-            {% endfor %}
-        </ul>
     </div>
 {% endblock %}
