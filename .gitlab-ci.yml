@@ -1,10 +1,23 @@
 test:
     image:
         name: pretix/ci-image
+    services:
+        - name: postgres:16
+          alias: postgres
+    variables:
+        POSTGRES_DB: pretix
+        POSTGRES_USER: postgres
+        POSTGRES_PASSWORD: postgres
+        EVY_RUNNING_ENVIRONMENT: testing
+        EVY_POSTGRES_HOST: postgres
+        EVY_POSTGRES_PORT: "5432"
+        EVY_POSTGRES_USER: postgres
+        EVY_POSTGRES_PASSWORD: postgres
+        EVY_POSTGRES_DB: pretix
     before_script:
         - pip install -U pip uv
-        - uv pip install --system -U wheel setuptools pytest pytest-django coverage
-        - uv pip install --system -U git+https://github.com/pretix/pretix.git@master#egg=pretix
+        - uv pip install --system -U wheel setuptools pytest pytest-django pytest-env coverage
+        - uv pip install --system -U "eventyay-unified @ git+https://github.com/fossasia/eventyay.git@dev#subdirectory=app"
     script:
         - uv pip install --system -e .
         - make
