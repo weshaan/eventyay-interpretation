@@ -171,3 +171,8 @@ class SusiClient:
     def stop_session(self, tenant_id: str) -> SusiResult:
         """Stop the grabber and release resources for a tenant."""
         return self._request("POST", f"/stop_event/{tenant_id}")
+
+    def latest_transcript(self, tenant_id: str, sentences: bool = True) -> SusiResult:
+        """Fetch the most recent transcript for a tenant (non-destructive)."""
+        params = {"tenant_id": tenant_id, "sentences": "true" if sentences else "false"}
+        return self._request("GET", "/transcripts/latest", params=params)
