@@ -4,9 +4,11 @@ import pytest
 
 from interpretation.services import source_for, start_stream_session
 from interpretation.utils import (
+    clear_module_interpretation,
     get_module_hls_url,
     get_room_hls_url,
     get_schedule_hls_url,
+    set_module_interpretation,
 )
 
 
@@ -184,3 +186,53 @@ def test_start_stream_session_omits_empty_providers():
 def test_start_stream_session_requires_hls_url():
     with pytest.raises(ValueError):
         start_stream_session(RecordingClient(), "")
+
+
+# -- module_config interpretation discovery ----------------------------
+
+
+def test_set_module_interpretation_writes_into_native_livestream():
+    room = FakeRoom(
+        module_config=[
+            {"type": "chat.native", "config": {}},
+            {"type": "livestream.native", "config": {"hls_url": "https://x/r.m3u8"}},
+        ]
+    )
+    info = {"enabled": True, "languages": ["de"], "url": "https://host/captions/"}
+    assert set_module_interpretation(room, info) is True
+    native = [m for m in room.module_config if m["type"] == "livestream.native"][0]
+    assert native["config"]["interpretation"] == info
+    # Existing config (hls_url) is preserved.
+    assert native["config"]["hls_url"] == "https://x/r.m3u8"
+
+
+def test_set_module_interpretation_without_native_returns_false():
+    room = FakeRoom(module_config=[{"type": "chat.native", "config": {}}])
+    assert set_module_interpretation(room, {"enabled": True}) is False
+
+
+def test_clear_module_interpretation_removes_info():
+    room = FakeRoom(
+        module_config=[
+            {
+                "type": "livestream.native",
+                "config": {
+                    "hls_url": "https://x/r.m3u8",
+                    "interpretation": {"enabled": True},
+                },
+            }
+        ]
+    )
+    assert clear_module_interpretation(room) is True
+    native = room.module_config[0]
+    assert "interpretation" not in native["config"]
+    assert native["config"]["hls_url"] == "https://x/r.m3u8"
+
+
+def test_clear_module_interpretation_noop_when_absent():
+    room = FakeRoom(
+        module_config=[
+            {"type": "livestream.native", "config": {"hls_url": "https://x/r.m3u8"}}
+        ]
+    )
+    assert clear_module_interpretation(room) is False

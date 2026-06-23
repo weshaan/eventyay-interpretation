@@ -20,6 +20,9 @@ class FakeResponse:
     def json(self):
         return self._json
 
+    def close(self):
+        return None
+
 
 def test_base_url_requires_value():
     with pytest.raises(ValueError):
@@ -151,3 +154,34 @@ def test_latest_transcript_passes_params(monkeypatch):
     assert captured["url"].endswith("/transcripts/latest")
     assert captured["params"] == {"tenant_id": "abc", "sentences": "true"}
     assert result.data["transcript"] == "hello world"
+
+
+def test_open_translate_stream_sends_params_and_token(monkeypatch):
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured["params"] = kwargs.get("params")
+        captured["headers"] = kwargs.get("headers")
+        captured["stream"] = kwargs.get("stream")
+        return FakeResponse(200, content=b"data: {}\n\n")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    resp = SusiClient("https://susi.example.com", "tok").open_translate_stream(
+        "abc", target_lang="de", last_chunk_id=7
+    )
+    assert captured["url"].endswith("/api/v1/translate/stream")
+    assert captured["params"] == {
+        "tenant_id": "abc",
+        "last_chunk_id": 7,
+        "target_lang": "de",
+    }
+    assert captured["headers"]["Authorization"] == "Bearer tok"
+    assert captured["stream"] is True
+    assert resp.ok
+
+
+def test_open_translate_stream_raises_on_error(monkeypatch):
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResponse(401, content=b""))
+    with pytest.raises(SusiError):
+        SusiClient("https://susi.example.com", "tok").open_translate_stream("abc")

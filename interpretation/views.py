@@ -1,5 +1,9 @@
+import asyncio
+import json
+
+from asgiref.sync import sync_to_async
 from django.contrib import messages
-from django.http import Http404, JsonResponse
+from django.http import Http404, JsonResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -10,9 +14,18 @@ from .forms import RoomInterpretationForm, SusiConnectionForm
 from .models import RoomInterpretation, SusiConnection
 from .services import start_stream_session
 from .susi import SusiClient, SusiError
-from .utils import get_room_hls_url
+from .utils import (
+    clear_module_interpretation,
+    get_room_hls_url,
+    set_module_interpretation,
+)
 
 PLUGIN_MODULE = "interpretation"
+
+# Seconds between polls of SUSI's transcript endpoint when bridging it to SSE.
+CAPTION_POLL_INTERVAL = 1.5
+# Max lifetime of a single SSE connection; the browser EventSource reconnects.
+CAPTION_STREAM_MAX_SECONDS = 600
 
 
 class InterpretationEnabledMixin:
@@ -274,6 +287,28 @@ class InterpretationRoomStart(_RoomControlBase, View):
         interpretation.hls_url = hls_url
         interpretation.status = RoomInterpretation.STATUS_RUNNING
         interpretation.save()
+
+        # Expose caption discovery info to the video frontend via module_config.
+        captions_url = request.build_absolute_uri(
+            reverse(
+                "plugins:interpretation:room.captions",
+                kwargs={
+                    "organizer": self.request.event.organizer.slug,
+                    "event": self.request.event.slug,
+                    "pk": room.pk,
+                },
+            )
+        )
+        if set_module_interpretation(
+            room,
+            {
+                "enabled": True,
+                "languages": interpretation.target_languages,
+                "url": captions_url,
+            },
+        ):
+            room.save(update_fields=["module_config"])
+
         if hasattr(interpretation, "log_action"):
             interpretation.log_action(
                 "interpretation.room.started",
@@ -319,6 +354,10 @@ class InterpretationRoomStop(_RoomControlBase, View):
         interpretation.status = RoomInterpretation.STATUS_STOPPED
         interpretation.susi_session_id = ""
         interpretation.save()
+
+        if clear_module_interpretation(room):
+            room.save(update_fields=["module_config"])
+
         messages.success(
             request,
             _("Interpretation stopped for room %(room)s.") % {"room": room.name},
@@ -383,3 +422,89 @@ class InterpretationRoomTranscript(_RoomControlBase, View):
                 "session": True,
             }
         )
+
+
+class InterpretationRoomCaptions(View):
+    """Relay SUSI captions to the browser as a same-origin SSE stream.
+    """
+
+    http_method_names = ["get"]
+
+    async def get(self, request, *args, **kwargs):
+        pk = kwargs["pk"]
+
+        @sync_to_async
+        def load():
+            if PLUGIN_MODULE not in request.event.get_plugins():
+                return None, "disabled"
+            room = get_object_or_404(request.event.rooms, pk=pk)
+            interp = (
+                RoomInterpretation.objects.filter(room=room)
+                .select_related("connection")
+                .first()
+            )
+            if interp is None or not interp.susi_session_id:
+                return None, "nosession"
+            # Snapshot the plain fields we need so no ORM access happens later.
+            return {
+                "base_url": interp.connection.base_url,
+                "auth_token": interp.connection.auth_token,
+                "tenant_id": interp.susi_session_id,
+                "target_languages": list(interp.target_languages or []),
+            }, None
+
+        info, err = await load()
+        if err == "disabled":
+            raise Http404("Interpretation is not enabled for this event.")
+        if err == "nosession":
+            raise Http404("No running interpretation session for this room.")
+
+        target_lang = request.GET.get("lang", "")
+        if (
+            target_lang
+            and info["target_languages"]
+            and target_lang not in info["target_languages"]
+        ):
+            raise Http404("Unknown caption language for this room.")
+
+        client = SusiClient(info["base_url"], info["auth_token"])
+        tenant_id = info["tenant_id"]
+        poll = sync_to_async(client.latest_transcript, thread_sensitive=False)
+
+        async def event_stream():
+            yield 'data: {"status": "connected"}\n\n'
+            last_serialized = None
+            loops = int(CAPTION_STREAM_MAX_SECONDS / CAPTION_POLL_INTERVAL)
+            for _ in range(loops):
+                try:
+                    result = await poll(tenant_id)
+                except SusiError:
+                    yield ": keepalive\n\n"
+                    await asyncio.sleep(CAPTION_POLL_INTERVAL)
+                    continue
+
+                data = result.data or {}
+                transcript = data.get("transcript", "") or ""
+                translation = data.get("translation", "") or ""
+                if transcript or translation:
+                    payload = {
+                        "chunk_id": data.get("chunk_id", ""),
+                        "transcript": transcript,
+                        "translation": translation,
+                    }
+                    serialized = json.dumps(payload)
+                    if serialized != last_serialized:
+                        last_serialized = serialized
+                        yield f"data: {serialized}\n\n"
+                    else:
+                        yield ": keepalive\n\n"
+                else:
+                    yield ": keepalive\n\n"
+                await asyncio.sleep(CAPTION_POLL_INTERVAL)
+
+        response = StreamingHttpResponse(
+            event_stream(), content_type="text/event-stream"
+        )
+        response["Cache-Control"] = "no-cache"
+        response["X-Accel-Buffering"] = "no"
+        return response

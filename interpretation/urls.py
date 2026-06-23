@@ -3,6 +3,7 @@ from eventyay.common.urls import OrganizerSlugConverter  # noqa: F401
 
 from .views import (
     InterpretationDashboard,
+    InterpretationRoomCaptions,
     InterpretationRoomConfig,
     InterpretationRoomList,
     InterpretationRoomStart,
@@ -48,5 +49,10 @@ urlpatterns = [
         _PREFIX + "rooms/<int:pk>/transcript/",
         InterpretationRoomTranscript.as_view(),
         name="room.transcript",
+    ),
+    path(
+        _PREFIX + "rooms/<int:pk>/captions/",
+        InterpretationRoomCaptions.as_view(),
+        name="room.captions",
     ),
 ]

@@ -1,9 +1,5 @@
 """Thin HTTP client for the SUSI Translator Flask API.
-
-The SUSI server is a separate Flask service (fossasia/susi_translator). It uses
-JWT auth (flask-jwt-extended) with tokens accepted in either cookies or the
-``Authorization`` header. This client always authenticates via the header with a
-Bearer token to avoid cookie CSRF handling.
+The SUSI server is a separate Flask service (fossasia/susi_translator). 
 
 Relevant SUSI endpoints used here:
     GET  /auth/api/status     -> {"authenticated": bool, "email", "name"}
@@ -106,9 +102,7 @@ class SusiClient:
 
     def login(self, email: str, password: str) -> str:
         """Authenticate with email/password and return the JWT access token.
-
-        SUSI sets the token as the ``access_token_cookie``; we read it from the
-        response cookies so it can be stored and reused as a Bearer token.
+        stored and reused as a Bearer token.
         """
         url = self._url("/auth/api/login")
         try:
@@ -129,7 +123,7 @@ class SusiClient:
         self.auth_token = token
         return token
 
-    # -- session lifecycle (used by later milestones) -------------------
+    # -- lifecycle ---------------------------------------------------
 
     def create_session(self, source: str = "url") -> str:
         """Mint a tenant/session ID for a given audio source."""
@@ -176,3 +170,30 @@ class SusiClient:
         """Fetch the most recent transcript for a tenant (non-destructive)."""
         params = {"tenant_id": tenant_id, "sentences": "true" if sentences else "false"}
         return self._request("GET", "/transcripts/latest", params=params)
+
+    def open_translate_stream(
+        self, tenant_id: str, target_lang: str = "", last_chunk_id: int = 0
+    ):
+        """Open SUSI's SSE caption stream and return the streaming response.
+        """
+        params = {"tenant_id": tenant_id, "last_chunk_id": last_chunk_id}
+        if target_lang:
+            params["target_lang"] = target_lang
+        url = self._url("/api/v1/translate/stream")
+        try:
+            # (connect timeout, read timeout): no read timeout for a long stream.
+            resp = requests.get(
+                url,
+                params=params,
+                headers=self._headers(),
+                stream=True,
+                timeout=(self.timeout, None),
+            )
+        except requests.RequestException as exc:
+            raise SusiError(
+                f"Could not open SUSI caption stream at {url}: {exc}"
+            ) from exc
+        if not resp.ok:
+            resp.close()
+            raise SusiError(f"SUSI caption stream returned HTTP {resp.status_code}.")
+        return resp
