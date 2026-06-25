@@ -2,7 +2,11 @@
 
 import pytest
 
-from interpretation.services import source_for, start_stream_session
+from interpretation.services import (
+    caption_payload_for_language,
+    source_for,
+    start_stream_session,
+)
 from interpretation.utils import (
     clear_module_interpretation,
     get_module_hls_url,
@@ -236,3 +240,66 @@ def test_clear_module_interpretation_noop_when_absent():
         ]
     )
     assert clear_module_interpretation(room) is False
+
+
+# -- translation provider threading ------------------------------------
+
+
+def test_start_stream_session_configures_translation_provider():
+    client = RecordingClient()
+    start_stream_session(
+        client,
+        "https://x/r.m3u8",
+        translation_provider="nllb_local",
+    )
+    _, _, kwargs = client.calls[1]
+    assert kwargs["translation"] == {"provider_name": "nllb_local"}
+
+
+# -- caption payload fallback ------------------------------------------
+
+
+def test_caption_payload_source_mode_shows_transcript():
+    out = caption_payload_for_language(
+        {"chunk_id": "3", "transcript": "hello"},
+        target_requested=False,
+        seen_translation=False,
+    )
+    assert out == {"chunk_id": "3", "transcript": "hello", "translation": "hello"}
+
+
+def test_caption_payload_target_with_translation_shows_translation():
+    out = caption_payload_for_language(
+        {"chunk_id": "3", "transcript": "hello", "translation": "hallo"},
+        target_requested=True,
+        seen_translation=True,
+    )
+    assert out["translation"] == "hallo"
+
+
+def test_caption_payload_target_no_translation_yet_falls_back_to_source():
+    # Translation never produced -> show source so the box is not blank.
+    out = caption_payload_for_language(
+        {"chunk_id": "3", "transcript": "hello", "translation": ""},
+        target_requested=True,
+        seen_translation=False,
+    )
+    assert out["translation"] == "hello"
+
+
+def test_caption_payload_target_lagging_translation_is_held():
+    # Translation seen before but lagging for this chunk -> skip, so the
+    # previous translated caption is held instead of flashing the source.
+    out = caption_payload_for_language(
+        {"chunk_id": "4", "transcript": "world", "translation": ""},
+        target_requested=True,
+        seen_translation=True,
+    )
+    assert out is None
+
+
+def test_caption_payload_empty_when_no_text():
+    out = caption_payload_for_language(
+        {"chunk_id": "3"}, target_requested=False, seen_translation=False
+    )
+    assert out is None

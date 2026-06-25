@@ -164,11 +164,12 @@ def test_open_translate_stream_sends_params_and_token(monkeypatch):
         captured["params"] = kwargs.get("params")
         captured["headers"] = kwargs.get("headers")
         captured["stream"] = kwargs.get("stream")
+        captured["timeout"] = kwargs.get("timeout")
         return FakeResponse(200, content=b"data: {}\n\n")
 
     monkeypatch.setattr(requests, "get", fake_get)
     resp = SusiClient("https://susi.example.com", "tok").open_translate_stream(
-        "abc", target_lang="de", last_chunk_id=7
+        "abc", target_lang="de", last_chunk_id=7, read_timeout=30
     )
     assert captured["url"].endswith("/api/v1/translate/stream")
     assert captured["params"] == {
@@ -178,6 +179,7 @@ def test_open_translate_stream_sends_params_and_token(monkeypatch):
     }
     assert captured["headers"]["Authorization"] == "Bearer tok"
     assert captured["stream"] is True
+    assert captured["timeout"][1] == 30
     assert resp.ok
 
 

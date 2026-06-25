@@ -1,6 +1,7 @@
 import asyncio
 import json
-
+import requests
+import threading
 from asgiref.sync import sync_to_async
 from django.contrib import messages
 from django.http import Http404, JsonResponse, StreamingHttpResponse
@@ -12,7 +13,7 @@ from eventyay.control.permissions import EventPermissionRequiredMixin
 
 from .forms import RoomInterpretationForm, SusiConnectionForm
 from .models import RoomInterpretation, SusiConnection
-from .services import start_stream_session
+from .services import caption_payload_for_language, start_stream_session
 from .susi import SusiClient, SusiError
 from .utils import (
     clear_module_interpretation,
@@ -22,10 +23,14 @@ from .utils import (
 
 PLUGIN_MODULE = "interpretation"
 
-# Seconds between polls of SUSI's transcript endpoint when bridging it to SSE.
-CAPTION_POLL_INTERVAL = 1.5
+# Seconds between emits while bridging SUSI's caption stream to the browser SSE.
+# Kept small so captions reach the player as soon as SUSI produces them; the
+# background consumer updates the latest event in real time.
+CAPTION_POLL_INTERVAL = 0.5
 # Max lifetime of a single SSE connection; the browser EventSource reconnects.
 CAPTION_STREAM_MAX_SECONDS = 600
+# Read timeout for the upstream SUSI stream so the consumer can exit on idle.
+CAPTION_UPSTREAM_READ_TIMEOUT = 30
 
 
 class InterpretationEnabledMixin:
@@ -137,6 +142,18 @@ class _RoomControlBase(InterpretationEnabledMixin, EventPermissionRequiredMixin)
             },
         )
 
+    def captions_url_for(self, room):
+        return self.request.build_absolute_uri(
+            reverse(
+                "plugins:interpretation:room.captions",
+                kwargs={
+                    "organizer": self.request.event.organizer.slug,
+                    "event": self.request.event.slug,
+                    "pk": room.pk,
+                },
+            )
+        )
+
 
 class InterpretationRoomList(_RoomControlBase, TemplateView):
     """List the event's rooms with their interpretation status."""
@@ -217,10 +234,31 @@ class InterpretationRoomConfig(_RoomControlBase, FormView):
             )
             return redirect(self.get_success_url())
         interpretation = form.save(commit=False)
-        interpretation.room = self.get_room(self.kwargs["pk"])
+        room = self.get_room(self.kwargs["pk"])
+        interpretation.room = room
         interpretation.connection = connection
         interpretation.save()
-        messages.success(self.request, _("Room interpretation settings saved."))
+
+        # Keep the video frontend's language list in sync when a session is live,
+        # so newly added target languages appear without re-starting the session.
+        if interpretation.susi_session_id and set_module_interpretation(
+            room,
+            {
+                "enabled": True,
+                "languages": interpretation.target_languages,
+                "url": self.captions_url_for(room),
+            },
+        ):
+            room.save(update_fields=["module_config"])
+            messages.success(
+                self.request,
+                _(
+                    "Room interpretation settings saved. Viewers may need to "
+                    "reload the video to see new languages."
+                ),
+            )
+        else:
+            messages.success(self.request, _("Room interpretation settings saved."))
         return redirect(self.get_success_url())
 
 
@@ -289,16 +327,7 @@ class InterpretationRoomStart(_RoomControlBase, View):
         interpretation.save()
 
         # Expose caption discovery info to the video frontend via module_config.
-        captions_url = request.build_absolute_uri(
-            reverse(
-                "plugins:interpretation:room.captions",
-                kwargs={
-                    "organizer": self.request.event.organizer.slug,
-                    "event": self.request.event.slug,
-                    "pk": room.pk,
-                },
-            )
-        )
+        captions_url = self.captions_url_for(room)
         if set_module_interpretation(
             room,
             {
@@ -425,8 +454,7 @@ class InterpretationRoomTranscript(_RoomControlBase, View):
 
 
 class InterpretationRoomCaptions(View):
-    """Relay SUSI captions to the browser as a same-origin SSE stream.
-    """
+    """Relay SUSI captions to the browser as a same-origin SSE stream."""
 
     http_method_names = ["get"]
 
@@ -469,38 +497,84 @@ class InterpretationRoomCaptions(View):
 
         client = SusiClient(info["base_url"], info["auth_token"])
         tenant_id = info["tenant_id"]
-        poll = sync_to_async(client.latest_transcript, thread_sensitive=False)
+
+        def consume(state):
+            """Read SUSI's translate SSE (with target_lang) in a worker thread.
+
+            Keeps ``state['latest']`` set to the most recent caption event so the
+            async emitter can forward it at a steady cadence. Using the translate
+            stream (not /transcripts/latest) is what makes translated text
+            available for the requested language.
+            """
+            try:
+                upstream = client.open_translate_stream(
+                    tenant_id,
+                    target_lang=target_lang,
+                    read_timeout=CAPTION_UPSTREAM_READ_TIMEOUT,
+                )
+            except SusiError:
+                state["done"] = True
+                return
+            try:
+                for raw in upstream.iter_lines(decode_unicode=True):
+                    if state["done"]:
+                        break
+                    if not raw or not raw.startswith("data:"):
+                        continue
+                    try:
+                        data = json.loads(raw.removeprefix("data:").strip())
+                    except ValueError:
+                        continue
+                    if not isinstance(data, dict) or data.get("status") == "connected":
+                        continue
+                    state["latest"] = data
+            except requests.RequestException:
+                pass
+            finally:
+                upstream.close()
+                state["done"] = True
 
         async def event_stream():
             yield 'data: {"status": "connected"}\n\n'
+            state = {"latest": None, "done": False}
+            threading.Thread(target=consume, args=(state,), daemon=True).start()
+            # Fallback source-transcript poll, so captions show even if the
+            # translate stream is slow or unavailable (translation, when present,
+            # comes from the translate stream via state["latest"]).
+            poll = sync_to_async(client.latest_transcript, thread_sensitive=False)
+            target_requested = bool(target_lang)
+            seen_translation = False
             last_serialized = None
             loops = int(CAPTION_STREAM_MAX_SECONDS / CAPTION_POLL_INTERVAL)
-            for _ in range(loops):
-                try:
-                    result = await poll(tenant_id)
-                except SusiError:
-                    yield ": keepalive\n\n"
-                    await asyncio.sleep(CAPTION_POLL_INTERVAL)
-                    continue
-
-                data = result.data or {}
-                transcript = data.get("transcript", "") or ""
-                translation = data.get("translation", "") or ""
-                if transcript or translation:
-                    payload = {
-                        "chunk_id": data.get("chunk_id", ""),
-                        "transcript": transcript,
-                        "translation": translation,
-                    }
-                    serialized = json.dumps(payload)
-                    if serialized != last_serialized:
-                        last_serialized = serialized
-                        yield f"data: {serialized}\n\n"
+            try:
+                for _i in range(loops):
+                    data = state["latest"]
+                    if data is None:
+                        try:
+                            result = await poll(tenant_id)
+                            data = result.data or None
+                        except SusiError:
+                            data = None
+                    if data:
+                        if data.get("translation"):
+                            seen_translation = True
+                        payload = caption_payload_for_language(
+                            data, target_requested, seen_translation
+                        )
+                        if payload:
+                            serialized = json.dumps(payload)
+                            if serialized != last_serialized:
+                                last_serialized = serialized
+                                yield f"data: {serialized}\n\n"
+                            else:
+                                yield ": keepalive\n\n"
+                        else:
+                            yield ": keepalive\n\n"
                     else:
                         yield ": keepalive\n\n"
-                else:
-                    yield ": keepalive\n\n"
-                await asyncio.sleep(CAPTION_POLL_INTERVAL)
+                    await asyncio.sleep(CAPTION_POLL_INTERVAL)
+            finally:
+                state["done"] = True
 
         response = StreamingHttpResponse(
             event_stream(), content_type="text/event-stream"

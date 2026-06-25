@@ -1,5 +1,5 @@
 """Thin HTTP client for the SUSI Translator Flask API.
-The SUSI server is a separate Flask service (fossasia/susi_translator). 
+The SUSI server is a separate Flask service (fossasia/susi_translator).
 
 Relevant SUSI endpoints used here:
     GET  /auth/api/status     -> {"authenticated": bool, "email", "name"}
@@ -172,22 +172,30 @@ class SusiClient:
         return self._request("GET", "/transcripts/latest", params=params)
 
     def open_translate_stream(
-        self, tenant_id: str, target_lang: str = "", last_chunk_id: int = 0
+        self,
+        tenant_id: str,
+        target_lang: str = "",
+        last_chunk_id: int = 0,
+        read_timeout: float | None = None,
     ):
         """Open SUSI's SSE caption stream and return the streaming response.
+
+        ``read_timeout`` bounds how long the consumer will block waiting for the
+        next line; pass a value so a relay can periodically check for shutdown
+        instead of blocking forever on an idle stream.
         """
         params = {"tenant_id": tenant_id, "last_chunk_id": last_chunk_id}
         if target_lang:
             params["target_lang"] = target_lang
         url = self._url("/api/v1/translate/stream")
         try:
-            # (connect timeout, read timeout): no read timeout for a long stream.
+            # (connect timeout, read timeout).
             resp = requests.get(
                 url,
                 params=params,
                 headers=self._headers(),
                 stream=True,
-                timeout=(self.timeout, None),
+                timeout=(self.timeout, read_timeout),
             )
         except requests.RequestException as exc:
             raise SusiError(
