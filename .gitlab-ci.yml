@@ -18,7 +18,8 @@ test:
         - pip install -U pip uv
         - git clone --depth 1 -b dev https://github.com/fossasia/eventyay.git eventyay-host
         - uv pip install --system -U wheel setuptools coverage
-        - uv pip install --system --group test -e "./eventyay-host/app"
+        - uv pip install --system -e "./eventyay-host/app"
+        - uv pip install --system pytest pytest-django pytest-env
     script:
         - uv pip install --system -e .
         - python -c "import eventyay.config.settings; print('eventyay OK')"
