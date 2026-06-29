@@ -1,6 +1,6 @@
 """Tests for the InterpretationSettingsForm validation logic."""
 
-from interpretation.forms import InterpretationSettingsForm
+from interpretation.forms import InterpretationSettingsForm, RoomInterpretationForm
 from interpretation.settings import (
     SETTING_AUTH_TOKEN,
     SETTING_BASE_URL,
@@ -10,7 +10,17 @@ from interpretation.settings import (
 PUBLIC_URL = "https://example.com"
 
 
+class _FakeHierarkey:
+    defaults = {}
+
+    def get_declared_type(self, key):
+        return str
+
+
 class _FakeSettings:
+    _parent = None
+    _h = _FakeHierarkey()
+
     def __init__(self, data=None):
         self._data = dict(data or {})
 
@@ -21,6 +31,9 @@ class _FakeSettings:
         if as_type is bool:
             return bool(value)
         return as_type(value)
+
+    def _cache(self):
+        return self._data.keys()
 
     def freeze(self):
         return self._data.copy()
@@ -108,3 +121,45 @@ def test_new_token_is_stripped():
     )
     assert form.is_valid(), form.errors
     assert form.cleaned_data[SETTING_AUTH_TOKEN] == "tok"
+
+
+def test_room_form_parses_comma_separated_languages():
+    form = RoomInterpretationForm(
+        data={
+            "hls_url": "https://stream.example.com/r.m3u8",
+            "source_language": "en",
+            "target_languages": "de, fr ,es",
+            "transcription_provider": "",
+            "translation_provider": "",
+        }
+    )
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["target_languages"] == ["de", "fr", "es"]
+
+
+def test_room_form_deduplicates_languages():
+    form = RoomInterpretationForm(
+        data={
+            "hls_url": "",
+            "source_language": "",
+            "target_languages": "de, de, fr",
+            "transcription_provider": "",
+            "translation_provider": "",
+        }
+    )
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["target_languages"] == ["de", "fr"]
+
+
+def test_room_form_empty_languages_is_empty_list():
+    form = RoomInterpretationForm(
+        data={
+            "hls_url": "",
+            "source_language": "",
+            "target_languages": "",
+            "transcription_provider": "",
+            "translation_provider": "",
+        }
+    )
+    assert form.is_valid(), form.errors
+    assert form.cleaned_data["target_languages"] == []

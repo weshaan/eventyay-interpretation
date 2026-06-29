@@ -133,4 +133,21 @@ def test_create_session_failure_raises(monkeypatch):
         lambda *a, **k: FakeResponse(400, {"error": "bad source"}),
     )
     with pytest.raises(SusiError):
-        SusiClient("https://example.com", "tok").create_session("nope")
+        SusiClient("https://susi.example.com", "tok").create_session("nope")
+
+
+def test_latest_transcript_passes_params(monkeypatch):
+    captured = {}
+
+    def fake_request(method, url, **kwargs):
+        captured["method"] = method
+        captured["url"] = url
+        captured["params"] = kwargs.get("params")
+        return FakeResponse(200, {"chunk_id": "5", "transcript": "hello world"})
+
+    monkeypatch.setattr(requests, "request", fake_request)
+    result = SusiClient("https://susi.example.com", "tok").latest_transcript("abc")
+    assert captured["method"] == "GET"
+    assert captured["url"].endswith("/transcripts/latest")
+    assert captured["params"] == {"tenant_id": "abc", "sentences": "true"}
+    assert result.data["transcript"] == "hello world"

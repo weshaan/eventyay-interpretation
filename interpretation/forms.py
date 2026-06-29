@@ -2,6 +2,7 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 from eventyay.base.forms import SECRET_REDACTED, SecretKeySettingsField, SettingsForm
 
+from .models import RoomInterpretation
 from .settings import (
     SETTING_AUTH_TOKEN,
     SETTING_BASE_URL,
@@ -43,7 +44,11 @@ class InterpretationSettingsForm(SettingsForm):
     def clean_interpretation_auth_token(self):
         token = (self.cleaned_data.get(SETTING_AUTH_TOKEN) or "").strip()
         if token == SECRET_REDACTED:
-            token = (self._stored_auth_token() or self.initial.get(SETTING_AUTH_TOKEN) or "").strip()
+            token = (
+                self._stored_auth_token()
+                or self.initial.get(SETTING_AUTH_TOKEN)
+                or ""
+            ).strip()
         return token
 
     def clean_interpretation_base_url(self):
@@ -70,3 +75,50 @@ class InterpretationSettingsForm(SettingsForm):
         if self.cleaned_data.get(SETTING_AUTH_TOKEN) == SECRET_REDACTED:
             self.cleaned_data[SETTING_AUTH_TOKEN] = self._stored_auth_token()
         return super().save()
+
+
+class RoomInterpretationForm(forms.ModelForm):
+    """Per-room interpretation configuration.
+
+    ``target_languages`` is stored as a JSON list but edited as a
+    comma-separated string for convenience.
+    """
+
+    target_languages = forms.CharField(
+        required=False,
+        label=_("Target languages"),
+        help_text=_("Comma-separated language codes to translate into, e.g. de, fr."),
+        widget=forms.TextInput(attrs={"placeholder": "de, fr, es"}),
+    )
+
+    class Meta:
+        model = RoomInterpretation
+        fields = [
+            "hls_url",
+            "source_language",
+            "target_languages",
+            "transcription_provider",
+            "translation_provider",
+        ]
+        widgets = {
+            "hls_url": forms.URLInput(
+                attrs={"placeholder": "https://stream.example.com/room.m3u8"}
+            ),
+            "source_language": forms.TextInput(attrs={"placeholder": "en"}),
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and isinstance(self.instance.target_languages, list):
+            self.initial["target_languages"] = ", ".join(self.instance.target_languages)
+
+    def clean_target_languages(self):
+        raw = self.cleaned_data.get("target_languages") or ""
+        codes = [c.strip() for c in raw.split(",") if c.strip()]
+        seen = set()
+        result = []
+        for code in codes:
+            if code not in seen:
+                seen.add(code)
+                result.append(code)
+        return result

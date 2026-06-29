@@ -34,6 +34,13 @@
         </div>
     </form>
 
+    <p>
+        <a class="btn btn-default"
+           href="{% url 'plugins:interpretation:rooms' organizer=event.organizer.slug event=event.slug %}">
+            {% trans "Manage interpretation rooms" %}
+        </a>
+    </p>
+
     <div class="panel panel-default">
         <div class="panel-heading">
             <h3 class="panel-title">{% trans "Status" %}</h3>
