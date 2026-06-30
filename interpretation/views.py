@@ -1,26 +1,25 @@
 from django.contrib import messages
-from django.db import transaction
 from django.http import Http404, JsonResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import FormView, TemplateView, View
-from eventyay.base.models import Event
 from eventyay.control.permissions import EventPermissionRequiredMixin
-from eventyay.control.views.event import EventSettingsFormView, EventSettingsViewMixin
+from eventyay.control.views.event import EventSettingsViewMixin
 
-from .forms import InterpretationSettingsForm, RoomInterpretationForm
+from .forms import RoomInterpretationForm
 from .models import RoomInterpretation
 from .services import start_stream_session
 from .settings import (
-    SETTING_AUTH_TOKEN,
-    SETTING_BASE_URL,
     get_base_url,
     get_susi_client,
+    get_susi_email,
+    get_susi_name,
     is_interpretation_enabled,
     is_susi_configured,
+    is_susi_connected,
 )
-from .susi import SusiClient, SusiError
+from .susi import SusiError
 from .utils import get_room_hls_url
 
 PLUGIN_MODULE = "interpretation"
@@ -40,84 +39,41 @@ class InterpretationEnabledMixin:
 class InterpretationDashboard(
     InterpretationEnabledMixin,
     EventSettingsViewMixin,
-    EventSettingsFormView,
+    EventPermissionRequiredMixin,
+    TemplateView,
 ):
-    """Configure the per-event SUSI connection and test connectivity."""
+    """Read-only overview of interpretation status for event organizers."""
 
-    model = Event
     template_name = "interpretation/dashboard.html"
     permission = "can_change_event_settings"
-    form_class = InterpretationSettingsForm
-
-    def get_success_url(self):
-        return reverse(
-            "plugins:interpretation:dashboard",
-            kwargs={
-                "organizer": self.request.event.organizer.slug,
-                "event": self.request.event.slug,
-            },
-        )
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         event = self.request.event
         ctx["event"] = event
-        ctx["plugin_module"] = PLUGIN_MODULE
         ctx["plugin_enabled"] = PLUGIN_MODULE in event.get_plugins()
         ctx["interpretation_enabled"] = is_interpretation_enabled(event)
+        ctx["susi_configured"] = is_susi_connected(event)
+        ctx["susi_ready"] = is_susi_configured(event)
+        ctx["susi_server_host"] = _susi_host(get_base_url(event))
+        ctx["susi_account"] = _susi_account_label(event)
         return ctx
 
-    @transaction.atomic
-    def post(self, request, *args, **kwargs):
-        form = self.get_form()
-        if form.is_valid():
-            form.save()
-            self._save_decoupled(form)
-            if form.has_changed():
-                request.event.log_action(
-                    "eventyay.event.settings",
-                    user=request.user,
-                    data={
-                        k: form.cleaned_data.get(k)
-                        for k in form.changed_data
-                        if k != "interpretation_auth_token"
-                    },
-                )
-            if "test" in request.POST:
-                self._test_connection(form)
-            else:
-                messages.success(request, _("Connection settings saved."))
-            return redirect(self.get_success_url())
 
-        messages.error(
-            request,
-            _("Please correct the errors below before saving."),
-        )
-        return self.render_to_response(self.get_context_data(form=form))
+def _susi_account_label(event) -> str:
+    name = get_susi_name(event)
+    email = get_susi_email(event)
+    if name and email:
+        return f"{name} ({email})"
+    return email or name
 
-    def _test_connection(self, form):
-        base_url = form.cleaned_data.get(SETTING_BASE_URL) or get_base_url(
-            self.request.event
-        )
-        token = form.cleaned_data.get(SETTING_AUTH_TOKEN, "")
-        client = SusiClient(base_url, token)
-        try:
-            result = client.verify()
-        except SusiError as exc:
-            messages.error(
-                self.request, _("Connection failed: %(error)s") % {"error": str(exc)}
-            )
-            return
-        if result.ok:
-            messages.success(
-                self.request,
-                _("Connection successful: %(message)s") % {"message": result.message},
-            )
-        else:
-            messages.warning(
-                self.request,
-                _("Connection issue: %(message)s") % {"message": result.message},
-            )
+
+def _susi_host(base_url: str) -> str:
+    if not base_url:
+        return ""
+    from urllib.parse import urlparse
+
+    return urlparse(base_url).netloc or base_url
 
 
 class _RoomControlBase(InterpretationEnabledMixin, EventPermissionRequiredMixin):
@@ -170,7 +126,7 @@ class InterpretationRoomList(_RoomControlBase, TemplateView):
                 }
             )
         ctx["event"] = event
-        ctx["interpretation_enabled"] = is_susi_configured(event)
+        ctx["interpretation_ready"] = is_susi_configured(event)
         ctx["rooms"] = rooms
         return ctx
 
@@ -211,7 +167,7 @@ class InterpretationRoomConfig(_RoomControlBase, FormView):
         if not is_susi_configured(self.request.event):
             messages.error(
                 self.request,
-                _("Configure the SUSI server connection before setting up rooms."),
+                _("Connect and enable SUSI in video admin before setting up rooms."),
             )
             return redirect(self.get_success_url())
         interpretation = form.save(commit=False)
@@ -232,7 +188,7 @@ class InterpretationRoomStart(_RoomControlBase, View):
         if not is_susi_configured(event):
             messages.error(
                 request,
-                _("Enable and configure the SUSI connection before starting a room."),
+                _("Connect and enable SUSI in video admin before starting a room."),
             )
             return redirect(self.rooms_url())
 

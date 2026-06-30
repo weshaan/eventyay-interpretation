@@ -4,12 +4,20 @@
 {% block content %}
     <h1>{% trans "Interpretation rooms" %}</h1>
 
-    {% if not interpretation_enabled %}
+    <p>
+        <a class="btn btn-default btn-sm"
+           href="{% url 'plugins:interpretation:dashboard' organizer=event.organizer.slug event=event.slug %}">
+            {% trans "Back to interpretation overview" %}
+        </a>
+    </p>
+
+    {% if not interpretation_ready %}
         <div class="alert alert-warning">
             {% url 'plugins:interpretation:dashboard' organizer=event.organizer.slug event=event.slug as dashboard_url %}
             {% blocktrans trimmed with url=dashboard_url %}
-                Interpretation is not enabled yet. Configure and enable the
-                <a href="{{ url }}">SUSI server connection</a> first.
+                Interpretation is not ready yet. An administrator must connect and
+                enable SUSI in video admin. See the
+                <a href="{{ url }}">interpretation overview</a> for status.
             {% endblocktrans %}
         </div>
     {% endif %}
@@ -61,7 +69,7 @@
                                   action="{% url 'plugins:interpretation:room.start' organizer=event.organizer.slug event=event.slug pk=entry.room.pk %}">
                                 {% csrf_token %}
                                 <button type="submit" class="btn btn-primary btn-sm"
-                                        {% if not interpretation_enabled %}disabled{% endif %}>
+                                        {% if not interpretation_ready %}disabled{% endif %}>
                                     {% trans "Start" %}
                                 </button>
                             </form>
