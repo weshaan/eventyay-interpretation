@@ -20,7 +20,7 @@ from .settings import (
     is_susi_connected,
 )
 from .susi import SusiError
-from .utils import get_room_hls_url
+from .utils import get_room_stream_url
 
 PLUGIN_MODULE = "interpretation"
 
@@ -113,10 +113,10 @@ class InterpretationRoomList(_RoomControlBase, TemplateView):
                 {
                     "room": room,
                     "interpretation": interpretation,
-                    "hls_url": (
-                        interpretation.hls_url
-                        if interpretation and interpretation.hls_url
-                        else get_room_hls_url(room)
+                    "stream_url": (
+                        interpretation.stream_url
+                        if interpretation and interpretation.stream_url
+                        else get_room_stream_url(room)
                     ),
                     "status": (
                         interpretation.status
@@ -143,7 +143,7 @@ class InterpretationRoomConfig(_RoomControlBase, FormView):
         if interpretation is None:
             interpretation = RoomInterpretation(
                 room=room,
-                hls_url=get_room_hls_url(room),
+                stream_url=get_room_stream_url(room),
             )
         self.room = room
         return interpretation
@@ -157,7 +157,7 @@ class InterpretationRoomConfig(_RoomControlBase, FormView):
         ctx = super().get_context_data(**kwargs)
         ctx["event"] = self.request.event
         ctx["room"] = getattr(self, "room", None) or self.get_room(self.kwargs["pk"])
-        ctx["detected_hls_url"] = get_room_hls_url(ctx["room"])
+        ctx["detected_stream_url"] = get_room_stream_url(ctx["room"])
         return ctx
 
     def get_success_url(self):
@@ -178,7 +178,7 @@ class InterpretationRoomConfig(_RoomControlBase, FormView):
 
 
 class InterpretationRoomStart(_RoomControlBase, View):
-    """Start a SUSI transcription session for a room's HLS stream."""
+    """Start a SUSI transcription session for a room's stream."""
 
     http_method_names = ["post"]
 
@@ -194,11 +194,11 @@ class InterpretationRoomStart(_RoomControlBase, View):
 
         interpretation, _created = RoomInterpretation.objects.get_or_create(room=room)
 
-        hls_url = interpretation.hls_url or get_room_hls_url(room)
-        if not hls_url:
+        stream_url = interpretation.stream_url or get_room_stream_url(room)
+        if not stream_url:
             messages.error(
                 request,
-                _("No HLS stream URL is configured for this room."),
+                _("No stream URL is configured for this room."),
             )
             return redirect(self.rooms_url())
 
@@ -206,39 +206,28 @@ class InterpretationRoomStart(_RoomControlBase, View):
         try:
             tenant_id = start_stream_session(
                 client,
-                hls_url,
-                source_type="url",
+                stream_url,
                 transcription_provider=interpretation.transcription_provider,
                 translation_provider=interpretation.translation_provider,
             )
         except SusiError as exc:
             interpretation.status = RoomInterpretation.STATUS_ERROR
-            interpretation.hls_url = hls_url
+            interpretation.stream_url = stream_url
             interpretation.save()
-            message = str(exc)
-            if "403" in message or "admin" in message.lower():
-                messages.error(
-                    request,
-                    _(
-                        "SUSI rejected the direct stream URL. Direct HLS sources "
-                        "require an admin token on the SUSI server."
-                    ),
-                )
-            else:
-                messages.error(
-                    request,
-                    _("Could not start interpretation: %(error)s") % {"error": message},
-                )
+            messages.error(
+                request,
+                _("Could not start interpretation: %(error)s") % {"error": str(exc)},
+            )
             return redirect(self.rooms_url())
 
         interpretation.susi_session_id = tenant_id
-        interpretation.hls_url = hls_url
+        interpretation.stream_url = stream_url
         interpretation.status = RoomInterpretation.STATUS_RUNNING
         interpretation.save()
         if hasattr(interpretation, "log_action"):
             interpretation.log_action(
                 "interpretation.room.started",
-                data={"tenant_id": tenant_id, "hls_url": hls_url},
+                data={"tenant_id": tenant_id, "stream_url": stream_url},
             )
         messages.success(
             request,

@@ -149,7 +149,7 @@ class SusiClient:
 
     # -- session lifecycle (used by later milestones) -------------------
 
-    def create_session(self, source: str = "url") -> str:
+    def create_session(self, source: str = "youtube") -> str:
         """Mint a tenant/session ID for a given audio source."""
         result = self._request("POST", "/session", json={"source": source})
         if not result.ok:
@@ -164,7 +164,7 @@ class SusiClient:
         tenant_id: str,
         *,
         stream_url: str = "",
-        source_type: str = "url",
+        stream_type: str = "youtube",
         transcription: dict | None = None,
         translation: dict | None = None,
     ) -> SusiResult:
@@ -176,7 +176,8 @@ class SusiClient:
             payload["translation"] = translation
         if stream_url:
             payload["stream_url"] = stream_url
-            payload["source_type"] = source_type
+            # SUSI reads ``stream_type`` (defaults to ``youtube`` if omitted).
+            payload["stream_type"] = stream_type
         result = self._request("POST", "/api/v1/translate/configure", json=payload)
         if not result.ok:
             raise SusiError(f"Failed to configure SUSI tenant: {result.data}")

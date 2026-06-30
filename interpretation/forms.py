@@ -198,15 +198,17 @@ class RoomInterpretationForm(forms.ModelForm):
     class Meta:
         model = RoomInterpretation
         fields = [
-            "hls_url",
+            "stream_url",
             "source_language",
             "target_languages",
             "transcription_provider",
             "translation_provider",
         ]
         widgets = {
-            "hls_url": forms.URLInput(
-                attrs={"placeholder": "https://stream.example.com/room.m3u8"}
+            "stream_url": forms.URLInput(
+                attrs={
+                    "placeholder": "https://www.youtube.com/watch?v=… or https://…/stream.m3u8"
+                }
             ),
             "source_language": forms.TextInput(attrs={"placeholder": "en"}),
         }

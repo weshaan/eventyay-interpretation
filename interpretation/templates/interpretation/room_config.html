@@ -5,11 +5,11 @@
 {% block content %}
     <h1>{% blocktrans trimmed with room=room.name %}Interpretation: {{ room }}{% endblocktrans %}</h1>
 
-    {% if detected_hls_url %}
+    {% if detected_stream_url %}
         <p class="text-muted">
-            {% blocktrans trimmed with url=detected_hls_url %}
+            {% blocktrans trimmed with url=detected_stream_url %}
                 Detected stream from the room configuration: <code>{{ url }}</code>.
-                Leave the HLS field empty to use it automatically.
+                Leave the stream URL field empty to use it automatically.
             {% endblocktrans %}
         </p>
     {% endif %}
@@ -19,7 +19,7 @@
         {% bootstrap_form_errors form %}
         <fieldset>
             <legend>{% trans "Stream and languages" %}</legend>
-            {% bootstrap_field form.hls_url layout='horizontal' %}
+            {% bootstrap_field form.stream_url layout='horizontal' %}
             {% bootstrap_field form.source_language layout='horizontal' %}
             {% bootstrap_field form.target_languages layout='horizontal' %}
         </fieldset>

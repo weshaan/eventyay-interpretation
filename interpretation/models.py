@@ -6,8 +6,8 @@ from eventyay.base.models import LoggedModel
 class RoomInterpretation(LoggedModel):
     """Interpretation configuration and session state for a single room.
 
-    Each room maps to one SUSI transcription session, fed by the room's HLS
-    stream and translated into the configured target languages. Per-event SUSI
+    Each room maps to one SUSI transcription session, fed by the room's
+    stream URL and translated into the configured target languages. Per-event SUSI
     connection settings live in the event settings backend (see
     :mod:`interpretation.settings`).
     """
@@ -28,12 +28,12 @@ class RoomInterpretation(LoggedModel):
         on_delete=models.CASCADE,
         related_name="interpretation",
     )
-    hls_url = models.URLField(
-        verbose_name=_("HLS stream URL"),
+    stream_url = models.URLField(
+        verbose_name=_("Stream URL"),
         blank=True,
         help_text=_(
-            "HLS (.m3u8) URL of the room's audio/video stream that SUSI will "
-            "ingest. Defaults from the room's stream configuration when empty."
+            "Stream URL that SUSI will ingest (YouTube, HLS, Vimeo, …). "
+            "Defaults from the room configuration when empty."
         ),
     )
     source_language = models.CharField(
