@@ -242,13 +242,76 @@ class InterpretationRoomCaptions(View):
 
         logger.info(
             "Caption SSE client connected event=%s room=%s tenant_id=%s "
-            "target_lang=%s susi_host=%s",
+            "target_lang=%s tts=%s susi_host=%s",
             event_slug,
             room_pk,
             tenant_id,
             target_lang or "(source)",
+            request.GET.get("tts") == "1",
             susi_host(susi_base),
         )
+
+        want_tts = request.GET.get("tts") == "1"
+        if want_tts:
+
+            def consume_tts(state):
+                try:
+                    upstream = client.open_translate_stream(
+                        tenant_id,
+                        target_lang=target_lang,
+                        audio=True,
+                        read_timeout=CAPTION_UPSTREAM_READ_TIMEOUT,
+                    )
+                except SusiError as exc:
+                    logger.warning(
+                        "TTS upstream SSE unavailable event=%s room=%s "
+                        "tenant_id=%s: %s",
+                        event_slug,
+                        room_pk,
+                        tenant_id,
+                        exc,
+                    )
+                    state["done"] = True
+                    return
+                try:
+                    for raw in upstream.iter_lines(decode_unicode=True):
+                        if state["done"]:
+                            break
+                        if raw:
+                            state["lines"].append(raw)
+                except requests.RequestException as exc:
+                    logger.warning(
+                        "TTS upstream SSE read error event=%s room=%s tenant_id=%s: %s",
+                        event_slug,
+                        room_pk,
+                        tenant_id,
+                        exc,
+                    )
+                finally:
+                    upstream.close()
+                    state["done"] = True
+
+            async def tts_stream():
+                yield 'data: {"status": "connected"}\n\n'
+                state = {"lines": [], "done": False}
+                threading.Thread(target=consume_tts, args=(state,), daemon=True).start()
+                loops = int(CAPTION_STREAM_MAX_SECONDS / CAPTION_POLL_INTERVAL)
+                try:
+                    for _i in range(loops):
+                        while state["lines"]:
+                            yield f"{state['lines'].pop(0)}\n\n"
+                        if state["done"]:
+                            break
+                        await asyncio.sleep(CAPTION_POLL_INTERVAL)
+                finally:
+                    state["done"] = True
+
+            response = StreamingHttpResponse(
+                tts_stream(), content_type="text/event-stream"
+            )
+            response["Cache-Control"] = "no-cache"
+            response["X-Accel-Buffering"] = "no"
+            return response
 
         def consume(state):
             try:

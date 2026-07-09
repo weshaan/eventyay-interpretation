@@ -26,6 +26,7 @@ def test_attendee_payload_shell_when_room_on_session_idle():
         "enabled": False,
         "languages": ["de", "fr"],
         "url": "",
+        "tts_url": "",
     }
 
 
@@ -37,6 +38,7 @@ def test_attendee_payload_live_when_session_running():
         "enabled": True,
         "languages": ["de"],
         "url": "https://x/captions/",
+        "tts_url": "https://x/captions/",
     }
 
 

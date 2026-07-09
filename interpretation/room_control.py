@@ -52,6 +52,7 @@ def attendee_interpretation_payload(
         "enabled": running,
         "languages": list(interpretation.target_languages or []),
         "url": captions_url.strip() if running else "",
+        "tts_url": captions_url.strip() if running else "",
     }
 
 

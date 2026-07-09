@@ -190,3 +190,17 @@ def test_open_translate_stream_raises_on_error(monkeypatch):
     monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResponse(401, content=b""))
     with pytest.raises(SusiError):
         SusiClient("https://susi.example.com", "tok").open_translate_stream("abc")
+
+
+def test_open_translate_stream_audio_param(monkeypatch):
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured["params"] = kwargs["params"]
+        return FakeResponse(200, content=b"")
+
+    monkeypatch.setattr(requests, "get", fake_get)
+    SusiClient("https://susi.example.com", "tok").open_translate_stream(
+        "abc", audio=True
+    )
+    assert captured["params"].get("audio") == "true"

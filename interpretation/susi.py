@@ -217,16 +217,21 @@ class SusiClient:
         target_lang: str = "",
         last_chunk_id: int = 0,
         read_timeout: float | None = None,
+        audio: bool = False,
     ):
         """Open SUSI's SSE caption stream and return the streaming response.
 
         ``read_timeout`` bounds how long the consumer will block waiting for the
         next line; pass a value so a relay can periodically check for shutdown
         instead of blocking forever on an idle stream.
+
+        Pass ``audio=True`` to request ``audio_b64`` WAV chunks in each event.
         """
         params = {"tenant_id": tenant_id, "last_chunk_id": last_chunk_id}
         if target_lang:
             params["target_lang"] = target_lang
+        if audio:
+            params["audio"] = "true"
         url = self._url("/api/v1/translate/stream")
         logger.info(
             "Opening SUSI translate SSE host=%s tenant_id=%s target_lang=%s",
