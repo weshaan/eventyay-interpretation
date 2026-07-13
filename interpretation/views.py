@@ -240,6 +240,8 @@ class InterpretationRoomCaptions(View):
         event_slug = request.event.slug
         room_pk = pk
         susi_base = info["base_url"]
+        want_tts = request.GET.get("tts") == "1"
+        tts_voice = request.GET.get("voice", "").strip() if want_tts else ""
 
         logger.info(
             "Caption SSE client connected event=%s room=%s tenant_id=%s "
@@ -252,7 +254,6 @@ class InterpretationRoomCaptions(View):
             susi_host(susi_base),
         )
 
-        want_tts = request.GET.get("tts") == "1"
         if want_tts and not target_lang:
             raise Http404("TTS requires a caption language.")
 
@@ -271,6 +272,7 @@ class InterpretationRoomCaptions(View):
                         target_lang=target_lang,
                         last_chunk_id=chunk_id,
                         audio=want_tts,
+                        voice=tts_voice,
                         read_timeout=read_timeout,
                     )
                 except SusiError as exc:
@@ -296,7 +298,12 @@ class InterpretationRoomCaptions(View):
                             data = json.loads(raw.removeprefix("data:").strip())
                         except ValueError:
                             continue
-                        if not isinstance(data, dict) or data.get("status") == "connected":
+                        if not isinstance(data, dict):
+                            continue
+                        if data.get("status") == "connected":
+                            if isinstance(data.get("tts_voices"), list):
+                                with state["lock"]:
+                                    state["events"].append(data)
                             continue
                         with state["lock"]:
                             state["events"].append(data)
@@ -346,11 +353,18 @@ class InterpretationRoomCaptions(View):
             target_requested = bool(target_lang)
             seen_translation = False
             last_forward_key = None
+            last_capabilities_key = None
             forwarded = 0
             loops = int(CAPTION_STREAM_MAX_SECONDS / CAPTION_POLL_INTERVAL)
 
             def forward_data(data):
-                nonlocal seen_translation, last_forward_key, forwarded
+                nonlocal seen_translation, last_forward_key, last_capabilities_key, forwarded
+                if data.get("status") == "connected":
+                    serialized = json.dumps(data)
+                    if serialized == last_capabilities_key:
+                        return ": keepalive\n\n"
+                    last_capabilities_key = serialized
+                    return f"data: {serialized}\n\n"
                 if data.get("translation"):
                     seen_translation = True
                 payload = caption_payload_for_language(

@@ -218,6 +218,7 @@ class SusiClient:
         last_chunk_id: int = 0,
         read_timeout: float | None = None,
         audio: bool = False,
+        voice: str = "",
     ):
         """Open SUSI's SSE caption stream and return the streaming response.
 
@@ -226,12 +227,15 @@ class SusiClient:
         instead of blocking forever on an idle stream.
 
         Pass ``audio=True`` to request ``audio_b64`` WAV chunks in each event.
+        ``voice`` selects a server-advertised TTS voice.
         """
         params = {"tenant_id": tenant_id, "last_chunk_id": last_chunk_id}
         if target_lang:
             params["target_lang"] = target_lang
         if audio:
             params["audio"] = "true"
+            if voice:
+                params["voice"] = voice
         url = self._url("/api/v1/translate/stream")
         logger.info(
             "Opening SUSI translate SSE host=%s tenant_id=%s target_lang=%s audio=%s",
