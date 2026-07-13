@@ -197,10 +197,17 @@ def test_open_translate_stream_audio_param(monkeypatch):
 
     def fake_get(url, **kwargs):
         captured["params"] = kwargs["params"]
+        captured["timeout"] = kwargs.get("timeout")
         return FakeResponse(200, content=b"")
 
     monkeypatch.setattr(requests, "get", fake_get)
     SusiClient("https://susi.example.com", "tok").open_translate_stream(
-        "abc", audio=True
+        "abc", target_lang="de", last_chunk_id=3, audio=True, read_timeout=None
     )
-    assert captured["params"].get("audio") == "true"
+    assert captured["params"] == {
+        "tenant_id": "abc",
+        "last_chunk_id": 3,
+        "target_lang": "de",
+        "audio": "true",
+    }
+    assert captured["timeout"][1] is None

@@ -3,6 +3,7 @@ import json
 import logging
 import requests
 import threading
+import time
 
 from asgiref.sync import sync_to_async
 from django.contrib import messages
@@ -252,132 +253,146 @@ class InterpretationRoomCaptions(View):
         )
 
         want_tts = request.GET.get("tts") == "1"
-        if want_tts:
+        if want_tts and not target_lang:
+            raise Http404("TTS requires a caption language.")
 
-            def consume_tts(state):
+        try:
+            last_chunk_id = int(request.GET.get("last_chunk_id", 0) or 0)
+        except (TypeError, ValueError):
+            last_chunk_id = 0
+
+        def consume(state):
+            chunk_id = last_chunk_id
+            read_timeout = None if want_tts else CAPTION_UPSTREAM_READ_TIMEOUT
+            while not state["done"]:
                 try:
                     upstream = client.open_translate_stream(
                         tenant_id,
                         target_lang=target_lang,
-                        audio=True,
-                        read_timeout=CAPTION_UPSTREAM_READ_TIMEOUT,
+                        last_chunk_id=chunk_id,
+                        audio=want_tts,
+                        read_timeout=read_timeout,
                     )
                 except SusiError as exc:
                     logger.warning(
-                        "TTS upstream SSE unavailable event=%s room=%s "
-                        "tenant_id=%s: %s",
+                        "Caption upstream SSE unavailable event=%s room=%s "
+                        "tenant_id=%s tts=%s: %s; using transcript poll fallback",
                         event_slug,
                         room_pk,
                         tenant_id,
+                        want_tts,
                         exc,
                     )
                     state["done"] = True
                     return
+                events = 0
                 try:
                     for raw in upstream.iter_lines(decode_unicode=True):
                         if state["done"]:
                             break
-                        if raw:
-                            state["lines"].append(raw)
+                        if not raw or not raw.startswith("data:"):
+                            continue
+                        try:
+                            data = json.loads(raw.removeprefix("data:").strip())
+                        except ValueError:
+                            continue
+                        if not isinstance(data, dict) or data.get("status") == "connected":
+                            continue
+                        with state["lock"]:
+                            state["events"].append(data)
+                            state["latest"] = data
+                        events += 1
+                        try:
+                            cid = int(data.get("chunk_id", 0))
+                        except (TypeError, ValueError):
+                            cid = 0
+                        if cid > chunk_id:
+                            chunk_id = cid
                 except requests.RequestException as exc:
                     logger.warning(
-                        "TTS upstream SSE read error event=%s room=%s tenant_id=%s: %s",
+                        "Caption upstream SSE read error event=%s room=%s tenant_id=%s tts=%s: %s",
                         event_slug,
                         room_pk,
                         tenant_id,
+                        want_tts,
                         exc,
                     )
                 finally:
                     upstream.close()
-                    state["done"] = True
-
-            async def tts_stream():
-                yield 'data: {"status": "connected"}\n\n'
-                state = {"lines": [], "done": False}
-                threading.Thread(target=consume_tts, args=(state,), daemon=True).start()
-                loops = int(CAPTION_STREAM_MAX_SECONDS / CAPTION_POLL_INTERVAL)
-                try:
-                    for _i in range(loops):
-                        while state["lines"]:
-                            yield f"{state['lines'].pop(0)}\n\n"
-                        if state["done"]:
-                            break
-                        await asyncio.sleep(CAPTION_POLL_INTERVAL)
-                finally:
-                    state["done"] = True
-
-            response = StreamingHttpResponse(
-                tts_stream(), content_type="text/event-stream"
-            )
-            response["Cache-Control"] = "no-cache"
-            response["X-Accel-Buffering"] = "no"
-            return response
-
-        def consume(state):
-            try:
-                upstream = client.open_translate_stream(
-                    tenant_id,
-                    target_lang=target_lang,
-                    read_timeout=CAPTION_UPSTREAM_READ_TIMEOUT,
-                )
-            except SusiError as exc:
-                logger.warning(
-                    "Caption upstream SSE unavailable event=%s room=%s "
-                    "tenant_id=%s: %s; using transcript poll fallback",
-                    event_slug,
-                    room_pk,
-                    tenant_id,
-                    exc,
-                )
-                state["done"] = True
-                return
-            events = 0
-            try:
-                for raw in upstream.iter_lines(decode_unicode=True):
-                    if state["done"]:
-                        break
-                    if not raw or not raw.startswith("data:"):
-                        continue
-                    try:
-                        data = json.loads(raw.removeprefix("data:").strip())
-                    except ValueError:
-                        continue
-                    if not isinstance(data, dict) or data.get("status") == "connected":
-                        continue
-                    state["latest"] = data
-                    events += 1
-            except requests.RequestException as exc:
-                logger.warning(
-                    "Caption upstream SSE read error event=%s room=%s tenant_id=%s: %s",
-                    event_slug,
-                    room_pk,
-                    tenant_id,
-                    exc,
-                )
-            finally:
-                upstream.close()
-                state["done"] = True
-                logger.info(
-                    "Caption upstream SSE closed event=%s room=%s tenant_id=%s "
-                    "events_received=%s",
-                    event_slug,
-                    room_pk,
-                    tenant_id,
-                    events,
-                )
+                    logger.info(
+                        "Caption upstream SSE closed event=%s room=%s tenant_id=%s "
+                        "tts=%s events_received=%s",
+                        event_slug,
+                        room_pk,
+                        tenant_id,
+                        want_tts,
+                        events,
+                    )
+                if state["done"] or not want_tts:
+                    break
+                time.sleep(0.5)
+            state["done"] = True
 
         async def event_stream():
             yield 'data: {"status": "connected"}\n\n'
-            state = {"latest": None, "done": False}
+            state = {
+                "latest": None,
+                "events": [],
+                "lock": threading.Lock(),
+                "done": False,
+            }
             threading.Thread(target=consume, args=(state,), daemon=True).start()
             poll = sync_to_async(client.latest_transcript, thread_sensitive=False)
             target_requested = bool(target_lang)
             seen_translation = False
-            last_serialized = None
+            last_forward_key = None
             forwarded = 0
             loops = int(CAPTION_STREAM_MAX_SECONDS / CAPTION_POLL_INTERVAL)
+
+            def forward_data(data):
+                nonlocal seen_translation, last_forward_key, forwarded
+                if data.get("translation"):
+                    seen_translation = True
+                payload = caption_payload_for_language(
+                    data, target_requested, seen_translation
+                )
+                audio_b64 = data.get("audio_b64") if want_tts else None
+                if audio_b64:
+                    if payload:
+                        payload = dict(payload)
+                        payload["audio_b64"] = audio_b64
+                    else:
+                        payload = {
+                            "chunk_id": data.get("chunk_id"),
+                            "transcript": data.get("transcript") or "",
+                            "translation": data.get("translation") or "",
+                            "audio_b64": audio_b64,
+                        }
+                if not payload:
+                    return None
+                serialized = json.dumps(payload)
+                forward_key = (
+                    serialized,
+                    payload.get("chunk_id"),
+                    payload.get("audio_b64"),
+                )
+                if forward_key == last_forward_key:
+                    return ": keepalive\n\n"
+                last_forward_key = forward_key
+                forwarded += 1
+                return f"data: {serialized}\n\n"
+
             try:
                 for _i in range(loops):
+                    with state["lock"]:
+                        pending = state["events"]
+                        state["events"] = []
+                    if pending:
+                        for data in pending:
+                            out = forward_data(data)
+                            if out:
+                                yield out
+                        continue
                     data = state["latest"]
                     if data is None:
                         try:
@@ -386,21 +401,8 @@ class InterpretationRoomCaptions(View):
                         except SusiError:
                             data = None
                     if data:
-                        if data.get("translation"):
-                            seen_translation = True
-                        payload = caption_payload_for_language(
-                            data, target_requested, seen_translation
-                        )
-                        if payload:
-                            serialized = json.dumps(payload)
-                            if serialized != last_serialized:
-                                last_serialized = serialized
-                                forwarded += 1
-                                yield f"data: {serialized}\n\n"
-                            else:
-                                yield ": keepalive\n\n"
-                        else:
-                            yield ": keepalive\n\n"
+                        out = forward_data(data)
+                        yield out or ": keepalive\n\n"
                     else:
                         yield ": keepalive\n\n"
                     await asyncio.sleep(CAPTION_POLL_INTERVAL)
@@ -408,10 +410,11 @@ class InterpretationRoomCaptions(View):
                 state["done"] = True
                 logger.info(
                     "Caption SSE client disconnected event=%s room=%s tenant_id=%s "
-                    "captions_forwarded=%s",
+                    "tts=%s captions_forwarded=%s",
                     event_slug,
                     room_pk,
                     tenant_id,
+                    want_tts,
                     forwarded,
                 )
 

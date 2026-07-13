@@ -234,10 +234,11 @@ class SusiClient:
             params["audio"] = "true"
         url = self._url("/api/v1/translate/stream")
         logger.info(
-            "Opening SUSI translate SSE host=%s tenant_id=%s target_lang=%s",
+            "Opening SUSI translate SSE host=%s tenant_id=%s target_lang=%s audio=%s",
             susi_host(self.base_url),
             tenant_id,
             target_lang or "(source)",
+            audio,
         )
         try:
             # (connect timeout, read timeout).
@@ -268,9 +269,10 @@ class SusiClient:
             )
             raise SusiError(f"SUSI caption stream returned HTTP {resp.status_code}.")
         logger.info(
-            "SUSI translate SSE connected host=%s tenant_id=%s target_lang=%s",
+            "SUSI translate SSE connected host=%s tenant_id=%s target_lang=%s audio=%s",
             susi_host(self.base_url),
             tenant_id,
             target_lang or "(source)",
+            audio,
         )
         return resp

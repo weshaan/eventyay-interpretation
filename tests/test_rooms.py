@@ -306,3 +306,26 @@ def test_caption_payload_empty_when_no_text():
         {"chunk_id": "3"}, target_requested=False, seen_translation=False
     )
     assert out is None
+
+
+def test_tts_audio_still_forwarded_when_caption_held():
+    """Audio-only SSE events must not be dropped when captions are held."""
+    data = {
+        "chunk_id": "4",
+        "transcript": "world",
+        "translation": "",
+        "audio_b64": "UklGRg==",
+    }
+    payload = caption_payload_for_language(
+        data, target_requested=True, seen_translation=True
+    )
+    assert payload is None
+    audio_b64 = data.get("audio_b64")
+    if audio_b64:
+        payload = {
+            "chunk_id": data.get("chunk_id"),
+            "transcript": data.get("transcript") or "",
+            "translation": data.get("translation") or "",
+            "audio_b64": audio_b64,
+        }
+    assert payload["audio_b64"] == "UklGRg=="
