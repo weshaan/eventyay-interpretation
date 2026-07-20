@@ -7,6 +7,7 @@ import time
 
 from asgiref.sync import sync_to_async
 from django.contrib import messages
+from django.db import close_old_connections
 from django.http import Http404, StreamingHttpResponse
 from django.shortcuts import get_object_or_404, redirect
 from django.urls import reverse
@@ -257,6 +258,9 @@ class InterpretationRoomCaptions(View):
         if want_tts and not target_lang:
             raise Http404("TTS requires a caption language.")
 
+        # ponytail: long-lived SSE must not hold a request-scoped PG slot (max_connections).
+        await sync_to_async(close_old_connections, thread_sensitive=True)()
+
         try:
             last_chunk_id = int(request.GET.get("last_chunk_id", 0) or 0)
         except (TypeError, ValueError):
@@ -341,6 +345,7 @@ class InterpretationRoomCaptions(View):
             state["done"] = True
 
         async def event_stream():
+            await sync_to_async(close_old_connections, thread_sensitive=True)()
             yield 'data: {"status": "connected"}\n\n'
             state = {
                 "latest": None,
@@ -422,6 +427,7 @@ class InterpretationRoomCaptions(View):
                     await asyncio.sleep(CAPTION_POLL_INTERVAL)
             finally:
                 state["done"] = True
+                await sync_to_async(close_old_connections, thread_sensitive=True)()
                 logger.info(
                     "Caption SSE client disconnected event=%s room=%s tenant_id=%s "
                     "tts=%s captions_forwarded=%s",
